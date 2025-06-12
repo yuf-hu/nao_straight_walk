@@ -1,0 +1,17 @@
+
+
+🚶 Running fixed gait until reaching x = 4.5 m …
+🏁 Reached x = 4.50 m in 197.88 s over 4947 steps
+
+
+
+
+
+📦 [Eval] Episode 1/1
+🏁 Reached x ≥ 4.500 m at t=131.40 s
+→ Episode 1: forward=9.526 m, lateral=-0.425 m, fell=False, time=131.40 s, reach_time=131.4
+
+✅ Loaded checkpoint from best_ddpg_model.pth onto cpu
+📦 [Eval] Episode 1/1
+🏁 Reached x ≥ 4.500 m at t=138.16 s
+→ Episode 1: forward=9.526 m, lateral=0.270 m, fell=False, time=138.16 s, reach_time=138.16

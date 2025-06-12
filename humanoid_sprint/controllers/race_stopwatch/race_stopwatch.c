@@ -1,31 +1,11 @@
-/*
- * Copyright 1996-2020 Cyberbotics Ltd.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/*
- * Description:  A controller running a race stopwatch.
- */
-
 #include <stdio.h>
 #include <string.h>
 #include <webots/distance_sensor.h>
 #include <webots/motor.h>
 #include <webots/robot.h>
 #include <webots/supervisor.h>
-#include <webots/utils/default_robot_window.h>
-#include "../../../include/robotbenchmark.h"
+#include <webots/plugins/robot_window/default.h>
+
 
 #define N_DIGIT 6
 
@@ -79,6 +59,7 @@ int main(int argc, char *argv[]) {
   stopwatch_init(digit);
   double time_step = wb_robot_get_basic_time_step();
   WbDeviceTag detector = wb_robot_get_device("detector");
+  
   wb_distance_sensor_enable(detector, time_step);
   WbNodeRef nao = wb_supervisor_node_get_from_def("NAO");
   WbFieldRef translation = wb_supervisor_node_get_field(nao, "translation");
@@ -124,11 +105,7 @@ int main(int argc, char *argv[]) {
   while (wb_robot_step(time_step) != -1) {
     const char *message = wb_robot_wwi_receive_text();
     if (message) {
-      if (strncmp(message, "record:", 7) == 0) {
-        // because the smallest record is the best, we send a negative value here
-        robotbenchmark_record(message, "humanoid_sprint", -record);
-        break;
-      } else if (strcmp(message, "exit") == 0)
+      if (strcmp(message, "exit") == 0)
         break;
     }
   }

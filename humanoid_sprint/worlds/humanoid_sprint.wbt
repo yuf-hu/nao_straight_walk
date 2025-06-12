@@ -1,4 +1,12 @@
-#VRML_SIM R2020a utf8
+#VRML_SIM R2022b utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2022b/projects/robots/softbank/nao/protos/Nao.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2022b/projects/objects/floors/protos/Floor.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2022b/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2022b/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2022b/projects/appearances/protos/Grass.proto"
+EXTERNPROTO "../protos/RaceStopwatch.proto"
+
 WorldInfo {
   info [
     "The humanoid sprint benchmark aims at programing a NAO robot in Python to run a 10 meter race. "
@@ -22,8 +30,8 @@ WorldInfo {
   ]
 }
 Viewpoint {
-  orientation 0.4229511610638218 -0.8985389522600371 -0.11721803029483097 5.5889281
-  position -3.2842069 1.4798389 2.2429662
+  orientation 0.5289752074188327 -0.34519712246361245 -0.7752574905017331 4.658684954052928
+  position -7.402499687522015 -4.341366495625458 6.7210484611718355
   follow "NAO"
 }
 TexturedBackground {
@@ -108,8 +116,18 @@ DEF GRASS Solid {
   locked TRUE
 }
 DEF NAO Nao {
-  translation -5.345 0.334 -0.65
+  hidden rotation_22 0 1 0 0.9599999998758255
+  hidden rotation_23 0 0.9999999999999999 0 0.9599999999255451
+  hidden rotation_25 0 0.9999999999999999 0 0.9599999998751693
+  hidden rotation_26 0 0.9999999999999999 0 0.9599999999251921
+  hidden rotation_34 0 0.9999999999999999 0 0.9599999998701083
+  hidden rotation_35 0 1 0 0.9599999999224402
+  hidden rotation_37 0 1 0 0.9599999998694602
+  hidden rotation_38 0 1 0 0.9599999999220863
+  translation -5.02099 1 0.696172
+  rotation 0 0 1 0.0837
   controller "sprinter"
+  supervisor TRUE
 }
 RaceStopwatch {
   translation 4.73 0 -1.19623
