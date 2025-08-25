@@ -12,59 +12,43 @@ import time
 import torch.nn.utils.rnn as rnn_utils
 import matplotlib.pyplot as plt
 import math
-import os
+import os,csv,json
 import copy
-
+from pathlib import Path
+from datetime import datetime
+from helperfunction import (
+    load_initial_actions_csv,
+    _prepare_logging,
+    _append_metric,
+    _save_meta,
+    save_checkpoint,
+    load_checkpoint,
+    plot_q_reward_over_updates_gs,
+    plot_q_reward_from_csv_gs,
+    rotate_metrics_csv,
+    load_bc
+)
 STATE_DIM = 18
 ACTION_DIM = 100
-TRAIN_EPISODES=100
+TRAIN_EPISODES=10
 NUM_EPISODES =100
 NUM_BC_EPISODES = 100
 SEQUENCE_LENGTH=35
 INITIAL_STATE=[2.813063620922607e-07, -2.8354001787624697e-07, 2.661361167672216e-07, 2.680192760864757e-07, 2.967163694572752e-07, 2.9883194662671264e-07, 2.4820736847423014e-07, 2.4949180207911914e-07, 1.9713857411518186e-07, 1.9756885276656546e-07, -1.866298555697199e-07, 1.8715301552270632e-07, [-5.021522061737612,  0.9999547666320551, 0.7058214811932133]]
 ACTOR_LR=1e-4
 CRITIC_LR=1e-4
+MAX_FALLS= 20
 CKPTPATH="ddpg_checkpoint.pth"
 CKPTLPATH="ddpg_checkpoint_false.pth"
-INITIAL_ACTIONS = [
-           [-0.034,-0.518,1.047,-0.529,0.034,-0.034,-0.518,1.047,-0.529,0.034,],  
-           [-0.044,-0.516,1.045,-0.53,0.044,-0.044,-0.516,1.045,-0.53,0.044,],
-           [-0.063,-0.51,1.041,-0.531,0.063,-0.063,-0.51,1.041,-0.531,0.063,],
-           [-0.08,-0.505,1.036,-0.531,0.08,-0.08,-0.505,1.036,-0.531,0.08,],
-           [-0.101,-0.498,1.029,-0.531,0.101,-0.101,-0.498,1.029,-0.531,0.101,],
-           [-0.136,-0.482,1.013,-0.531,0.136,-0.136,-0.482,1.013,-0.531,0.136],
-           [-0.157,-0.468,0.999,-0.531,0.157,-0.157,-0.468,0.999,-0.531,0.157,],
-           [-0.173,-0.454,0.987,-0.533,0.173,-0.174,-0.459,0.996,-0.537,0.174,],
-           [-0.15,-0.44,0.984,-0.544,0.19,-0.197,-0.52,1.119,-0.599,0.197,],
-           [-0.144,-0.442,0.999,-0.557,0.196,-0.211,-0.605,1.244,-0.639,0.211,],
-           [-0.146,-0.452,1.033,-0.582,0.198,-0.223,-0.743,1.374,-0.631,0.223,],
-           [-0.142,-0.454,1.051,-0.597,0.195,-0.219,-0.803,1.378,-0.575,0.219,],
-           [-0.134,-0.447,1.056,-0.609,0.187,-0.205,-0.815,1.313,-0.498,0.205,],
-           [-0.121,-0.427,1.045,-0.618,0.174,-0.184,-0.777,1.202,-0.425,0.184],
-           [-0.128,-0.379,1.011,-0.632,0.145,-0.147,-0.678,1.037,-0.36,0.147,],
-           [-0.119,-0.344,0.99,-0.646,0.119,-0.119,-0.634,1,-0.366,0.119,],
-           [-0.065,-0.293,0.97,-0.677,0.065,-0.065,-0.604,1.022,-0.417,0.065,],
-           [-0.019,-0.253,0.948,-0.696,0.019,-0.019,-0.579,1.033,-0.453,0.019,],
-           [0.029,-0.204,0.913,-0.709,-0.029,0.029,-0.547,1.033,-0.486,-0.029,],
-           [0.094,-0.124,0.838,-0.714,-0.094,0.094,-0.489,1.014,-0.525,-0.094,],
-           [0.126,-0.096,0.828,-0.733,-0.126,0.12,-0.451,0.993,-0.542,-0.125,],
-           [0.153,-0.142,0.934,-0.792,-0.153,0.108,-0.424,0.983,-0.559,-0.147,],
-           [0.186,-0.337,1.196,-0.859,-0.186,0.117,-0.412,0.99,-0.578,-0.169],
-           [0.199,-0.508,1.335,-0.827,-0.199,0.124,-0.42,1.008,-0.589,-0.177,],
-           [0.201,-0.661,1.384,-0.722,-0.201,0.126,-0.432,1.03,-0.599,-0.178,],
-           [0.184,-0.763,1.278,-0.515,-0.184,0.117,-0.435,1.047,-0.612,-0.17,],
-           [0.164,-0.739,1.148,-0.409,-0.164,0.105,-0.418,1.038,-0.62,-0.157],
-           [0.14,-0.683,1.039,-0.356,-0.14,0.122,-0.387,1.017,-0.63,-0.139,],
-           [0.099,-0.628,1.006,-0.378,-0.099,0.099,-0.334,0.988,-0.654,-0.099,],
-           [0.062,-0.608,1.022,-0.414,-0.062,0.062,-0.299,0.974,-0.675,-0.062,],
-           [-0.007,-0.566,1.034,-0.468,0.007,-0.007,-0.233,0.935,-0.702,0.007,],
-           [-0.055,-0.53,1.029,-0.499,0.055,-0.055,-0.181,0.892,-0.712,0.055,],
-           [-0.095,-0.49,1.014,-0.524,0.095,-0.095,-0.126,0.839,-0.714,0.095,],
-           [-0.121,-0.452,0.993,-0.541,0.126,-0.127,-0.097,0.83,-0.732,0.127,],
-           [-0.105,-0.417,0.982,-0.565,0.157,-0.166,-0.194,1.018,-0.824,0.166,]                    
-        ]
-
-
+ 
+SMOOTH_K=5 
+INITIAL_ACTIONS = load_initial_actions_csv(
+    "initial_actions.csv",   # 同目录下的文件名
+    expected_dim=10,         # 动作维度
+    to_radians=False,        # 如果是度就设 True
+    device="cpu",
+    dtype=torch.float32
+)
 
 class ReplayBuffer:
 
@@ -115,44 +99,7 @@ class ReplayBuffer:
         return len(self.buffer)
 
 
-class SequenceBCBuffer:
-    def __init__(self, capacity=10000):
-        self.capacity = capacity
-        self.buffer = []
 
-    def push_sequence(self, states, actions):
-
-        if isinstance(states, list) and isinstance(states[0], torch.Tensor):
-            states = [s.detach().cpu().numpy().tolist() for s in states]
-        if isinstance(actions, list) and isinstance(actions[0], torch.Tensor):
-            actions = [a.detach().cpu().numpy().tolist() for a in actions]
-
-        self.buffer.append((states, actions))
-        if len(self.buffer) > self.capacity:
-            self.buffer.pop(0)
-
-    def sample_sequences(self, batch_size):
-
-        batch = random.sample(self.buffer, min(batch_size, len(self.buffer)))
-        return batch
-
-    def flatten_sample(self, batch_size):
-
-        data = random.sample(self.buffer, min(batch_size, len(self.buffer)))
-        all_states = []
-        all_actions = []
-        for s_seq, a_seq in data:
-            all_states.extend(s_seq)
-            all_actions.extend(a_seq)
-        states = torch.tensor(all_states, dtype=torch.float32)
-        actions = torch.tensor(all_actions, dtype=torch.float32)
-        return states, actions
-
-    def clear(self):
-        self.buffer = []
-
-    def __len__(self):
-        return len(self.buffer)
 
 
 class Actor(nn.Module):
@@ -240,32 +187,22 @@ class DDPG:
         self.batch_size = 3
         self.min_buffer_size =3
         self.replay_buffer = ReplayBuffer(capacity=10000)
-        self.bc_buffer = SequenceBCBuffer(capacity=10000)
-
+     
+        self.last_train_metrics={}
         self._train_logs = {
             "rewards": [], "target_qs": [], "current_qs": [],
             "actor_losses": [], "critic_losses": [], "q_vs_r_pairs": [] 
         }
-        self.demo_actions=torch.tensor(INITIAL_ACTIONS)
         self.actor_update_start = 0
 
     def soft_update(self, net, net_target):
         for param, target_param in zip(net.parameters(), net_target.parameters()):
             target_param.data.copy_((1.0 - self.tau) * target_param.data + self.tau * param.data)
     
-    def freeze_critic(self):
-        for param in self.critic.parameters():
-            param.requires_grad = False
-        print(" Critic network has been frozen.")
-    
-    def unfreeze_critic(self):
-        for param in self.critic.parameters():
-            param.requires_grad = True
-        print(" Critic network has been unfrozen.")
+
 
     def train(self, critic_updates: int = 2):
         if len(self.replay_buffer) < self.batch_size:
-            print(" Not enough data for training.")
             return 0.0, 0.0
     
         states, actions, rewards, next_states, dones, _ = \
@@ -274,281 +211,108 @@ class DDPG:
         device = self.device
         states      = states.to(device)
         actions     = actions.to(device)
-        rewards     = rewards.to(device)
+        rewards     = rewards.to(device).view(-1)     # 扁平化便于统计
         next_states = next_states.to(device)
-        dones       = dones.to(device)
+        dones       = dones.to(device).view(-1)
+    
+        # --- 无梯度统计：Q/Reward 均值等 + 最小/最大（用于波动范围） ---
+        with torch.no_grad():
+            next_a   = self.actor_target(next_states)
+            next_q   = self.critic_target(next_states, next_a).view(-1)
+            target_q = rewards + self.gamma * (1 - dones) * next_q
+    
+            current_q = self.critic(states, actions).view(-1)
+            td_mse    = F.mse_loss(current_q, target_q).item()
+            policy_q  = self.critic(states, self.actor(states)).mean().item()
+    
+            m = {
+                "replay_size": len(self.replay_buffer),
+                "batch_size": int(self.batch_size),
+                "critic_updates": int(critic_updates),
+    
+                # —— Q/Reward 的均值/标准差/最小/最大 —— #
+                "current_q_mean": current_q.mean().item(),
+                "current_q_std":  current_q.std(unbiased=False).item(),
+                "current_q_min":  current_q.min().item(),
+                "current_q_max":  current_q.max().item(),
+    
+                "target_q_mean":  target_q.mean().item(),
+    
+                "reward_mean":    rewards.mean().item(),
+                "reward_std":     rewards.std(unbiased=False).item(),
+                "reward_min":     rewards.min().item(),
+                "reward_max":     rewards.max().item(),
+    
+                "policy_q_mean":  policy_q,
+                "td_mse":         td_mse,
+                "done_ratio":     dones.float().mean().item(),
+            }
+    
+        # --- 工具：全局梯度范数 ---
+        def _grad_global_norm(module):
+            tot = 0.0
+            for p in module.parameters():
+                if p.grad is not None:
+                    tot += p.grad.data.pow(2).sum().item()
+            return tot ** 0.5
     
         avg_critic_loss = 0.0
-        current_q_val = 0.0
-        target_q_val  = 0.0
+        critic_grad_norms = []
     
-  
+        # --- Critic 多次更新 ---
         if any(p.requires_grad for p in self.critic.parameters()):
             total_critic_loss = 0.0
             for _ in range(critic_updates):
                 with torch.no_grad():
                     next_a   = self.actor_target(next_states)
-                    next_q   = self.critic_target(next_states, next_a)
+                    next_q   = self.critic_target(next_states, next_a).view(-1)
                     target_q = rewards + self.gamma * (1 - dones) * next_q
     
-                current_q   = self.critic(states, actions)
+                current_q   = self.critic(states, actions).view(-1)
                 critic_loss = F.mse_loss(current_q, target_q)
     
                 self.critic_optimizer.zero_grad()
                 critic_loss.backward()
+                critic_grad_norms.append(_grad_global_norm(self.critic))
                 self.critic_optimizer.step()
                 self.soft_update(self.critic, self.critic_target)
-    
                 total_critic_loss += critic_loss.item()
     
             avg_critic_loss = total_critic_loss / critic_updates
-            current_q_val = current_q.mean().item()
-            target_q_val  = target_q.mean().item()
-        else:
-            print(" Critic is frozen, skipping Critic update")
     
-
+        # --- Actor 更新 ---
         pred_a     = self.actor(states)
         actor_loss = - self.critic(states, pred_a).mean()
     
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        actor_grad_norm = _grad_global_norm(self.actor)
         self.actor_optimizer.step()
         self.soft_update(self.actor, self.actor_target)
     
-        actor_loss_val = actor_loss.item()
-        reward_val = rewards.mean().item()
+        # --- 缓存给外部（train_model 会读这些键） ---
+        m.update({
+            "actor_loss": actor_loss.item(),
+            "critic_loss": avg_critic_loss,
+            "actor_grad_norm": actor_grad_norm,
+            "critic_grad_norm_mean": (sum(critic_grad_norms) / max(1, len(critic_grad_norms))) if critic_grad_norms else 0.0,
+            "actor_lr": self.actor_optimizer.param_groups[0]["lr"],
+            "critic_lr": self.critic_optimizer.param_groups[0]["lr"],
+        })
+        self.last_train_metrics = m
     
-
-        self._train_logs.setdefault("actor_losses",  []).append(actor_loss_val)
-        self._train_logs.setdefault("critic_losses", []).append(avg_critic_loss)
-        self._train_logs.setdefault("current_qs",     []).append(current_q_val)
-        self._train_logs.setdefault("target_qs",      []).append(target_q_val)
-        self._train_logs.setdefault("rewards",        []).append(reward_val)
-    
-        print(f" [Train] Actor loss={actor_loss_val:.4f}, "
-              f"Critic loss={avg_critic_loss:.4f}, "
-              f"Q mean={current_q_val:.3f}→{target_q_val:.3f}, "
-              f"Reward={reward_val:.3f}")
-    
-        return actor_loss_val, avg_critic_loss
-
-
-    
-
-
-
-
-    
-    
-    def demo_train(self, repeat: int = 1):
-        if len(self.rl_buffer) < self.batch_size:
-            print(" Not enough data for demo training.")
-            return 0.0, 0.0
-    
-       
-        states, actions, rewards, next_states, dones, next_actions, mask = \
-            self.rl_buffer.sequence_batch_sample(self.batch_size)
-    
-        B, T, _ = states.shape
-        f_mask = mask.reshape(B * T, 1)
-        total_critic_loss = 0.0
-    
-        for r in range(repeat):
-            flat = lambda x: x.reshape(B * T, -1)
-            f_states = flat(states)
-            f_actions = flat(actions)
-            f_next_states = flat(next_states)
-            f_next_actions = flat(next_actions)
-            f_rewards = rewards.reshape(B * T, 1)
-            f_dones = dones.reshape(B * T, 1)
-    
-            with torch.no_grad():
-                next_q = self.critic_target(f_next_states, f_next_actions)
-                target_q = f_rewards + self.gamma * (1 - f_dones) * next_q
-    
-            current_q = self.critic(f_states, f_actions)
-   
-            td_error = F.smooth_l1_loss(current_q, target_q, reduction='none') * f_mask
-            critic_loss = td_error.sum() / f_mask.sum().clamp(min=1.0)
-    
-            self.critic_optimizer.zero_grad()
-            critic_loss.backward()
-            self.critic_optimizer.step()
-            total_critic_loss += critic_loss.item()
-    
-            self.soft_update(self.actor, self.actor_target)
-            self.soft_update(self.critic, self.critic_target)
-    
-            if r == repeat - 1:
-                q_vs_r = list(zip(current_q.squeeze().tolist(), f_rewards.squeeze().tolist()))
-                self._train_logs.setdefault("q_vs_r_pairs", []).append(q_vs_r)
-    
-        self._train_logs["rewards"].append(f_rewards.mean().item())
-        self._train_logs["target_qs"].append(target_q.mean().item())
-        self._train_logs["current_qs"].append(current_q.mean().item())
-        self._train_logs["actor_losses"].append(0.0)
-        self._train_logs["critic_losses"].append(total_critic_loss / repeat)
-    
-        print(f"[Demo Train] reward={f_rewards.mean():.3f}, current_q={current_q.mean():.3f}, "
-              f"target_q={target_q.mean():.3f}, critic_loss={critic_loss.item():.4f}")
-    
-        return 0.0, total_critic_loss / repeat
-
-    
-
-    
-    def train_bc(self,
-                      epochs: int = 200,
-                      lr: float = 5e-5,
-                      weight_decay: float = 0,
-                      clip_norm: float = None,
-                      patience: int = 20):
-        """
-          1) flatten_sample -> states[N,dim], actions[N,dim]
-          2) pred = actor(states)
-          3) loss = MSE(pred, actions)
-        """
-        optimizer = torch.optim.Adam(
-            self.actor.net.parameters(),
-            lr=lr,
-            weight_decay=weight_decay
+        # —— 每次 train() 完成后：打印当前批次 Q/Reward “分布摘要” —— #
+        print(
+            "[train] "
+            f"Qμ={m['current_q_mean']:.3f} σ={m['current_q_std']:.3f} "
+            f"range=[{m['current_q_min']:.3f},{m['current_q_max']:.3f}]  |  "
+            f"Rμ={m['reward_mean']:.3f} σ={m['reward_std']:.3f} "
+            f"range=[{m['reward_min']:.3f},{m['reward_max']:.3f}]  "
+            f"TDmse={m['td_mse']:.4f}"
         )
-        loss_fn = nn.MSELoss()
-        best_loss = float('inf')
-        no_improve = 0
     
-        for epoch in range(1, epochs+1):
-       
-            states, actions = self.bc_buffer.flatten_sample(self.batch_size)
-            states  = states.to(self.device)
-            actions = actions.to(self.device)
-    
+        return actor_loss.item(), avg_critic_loss
 
-            preds = self.actor(states)       
-            loss  = loss_fn(preds, actions)
-    
-            optimizer.zero_grad()
-            loss.backward()
-            if clip_norm:
-                torch.nn.utils.clip_grad_norm_(
-                    self.actor.net.parameters(), clip_norm
-                )
-            optimizer.step()
-    
-            avg = loss.item()
-            print(f"Epoch [{epoch}/{epochs}] flat‐mapped-MSE: {avg:.6f}")
-    
-            # Early stopping
-            if avg + 1e-6 < best_loss:
-                best_loss  = avg
-                no_improve = 0
-            else:
-                no_improve += 1
-                if no_improve >= patience:
-                    print(f" Early stopping at epoch {epoch}")
-                    break
-    
-        print("=== Flat‐BC Training Finished ===")
-
-
-    
-
-
-
-
-    
-
-    
-            
-    def save_checkpoint(self, filepath="ddpg_checkpoint.pth"):
-        checkpoint = {
-            "actor_state_dict": self.actor.state_dict(),
-            "critic_state_dict": self.critic.state_dict(),
-            "actor_target_state_dict": self.actor_target.state_dict(),
-            "critic_target_state_dict": self.critic_target.state_dict(),
-            "actor_optimizer": self.actor_optimizer.state_dict(),
-            "critic_optimizer": self.critic_optimizer.state_dict(),
-            "train_logs": self._train_logs,
-        }
-        torch.save(checkpoint, filepath)
-        print(f"Saved DDPG checkpoint (with target networks) to {filepath}")
-
-    
-    def load_checkpoint(self, filepath="ddpg_checkpoint.pth", actor_lr: float = 1e-4, critic_lr: float = 1e-4):
-        import os, torch
-        if not os.path.exists(filepath):
-            print(f" Checkpoint not found at {filepath}")
-            return
-    
-        checkpoint = torch.load(filepath, map_location="cpu")
-
-        name, _ = next(self.critic.named_parameters())
-        print(f" Before load: critic parameter '{name}' first 5 vals =",
-              self.critic.state_dict()[name].view(-1)[:5])
-
-        self.actor.load_state_dict(checkpoint["actor_state_dict"])
-        self.critic.load_state_dict(checkpoint["critic_state_dict"])
-        self.actor.to(self.device)
-        self.critic.to(self.device)
-    
-
-        if "actor_target_state_dict" in checkpoint:
-            self.actor_target.load_state_dict(checkpoint["actor_target_state_dict"])
-            self.actor_target.to(self.device)
-            print(" Loaded actor_target from checkpoint.")
-        else:
-            print("actor_target not found in checkpoint.")
-    
-        if "critic_target_state_dict" in checkpoint:
-            self.critic_target.load_state_dict(checkpoint["critic_target_state_dict"])
-            self.critic_target.to(self.device)
-            print(" Loaded critic_target from checkpoint.")
-        else:
-            print(" critic_target not found in checkpoint.")
-    
-        print(f"▶ After load: critic parameter '{name}' first 5 vals =",
-              self.critic.state_dict()[name].view(-1)[:5])
-        print(f"▶ After load: critic_target parameter '{name}' first 5 vals =",
-              self.critic_target.state_dict()[name].view(-1)[:5])
-
-        if "actor_optimizer" in checkpoint:
-            self.actor_optimizer.load_state_dict(checkpoint["actor_optimizer"])
-        if "critic_optimizer" in checkpoint:
-            self.critic_optimizer.load_state_dict(checkpoint["critic_optimizer"])
-    
-        for opt in (self.actor_optimizer, self.critic_optimizer):
-            for state in opt.state.values():
-                for k, v in state.items():
-                    if isinstance(v, torch.Tensor):
-                        state[k] = v.to(self.device)
-    
-        if actor_lr is not None:
-            for pg in self.actor_optimizer.param_groups:
-                pg['lr'] = actor_lr
-            print(f" Actor optimizer learning rate set to {actor_lr}")
-        if critic_lr is not None:
-            for pg in self.critic_optimizer.param_groups:
-                pg['lr'] = critic_lr
-            print(f" Critic optimizer learning rate set to {critic_lr}")
-    
-        print(f" Loaded checkpoint from {filepath} onto {self.device}")
-
-
-
-    def load_bc(self, filepath="actor_bc.pth"):
-        import os
-        if not os.path.exists(filepath):
-            print(f" Behavior cloning model not found at {filepath}")
-            return
-    
-        state_dict = torch.load(filepath, map_location="cpu")
-        self.actor.load_state_dict(state_dict)
-        self.actor_target.load_state_dict(state_dict)  # ✅ 同步 target actor
-        self.actor.to(self.device)
-        self.actor_target.to(self.device)
-    
-        print(f"Loaded behavior cloning model into actor and target actor from '{filepath}'")
 
 
     def select_action(self, state):
@@ -557,165 +321,7 @@ class DDPG:
             state = state.unsqueeze(0)
         action = self.actor(state)
         return action.squeeze(0)
-        
-
-    def log_tensor_stats(name, tensor):
-        if isinstance(tensor, torch.Tensor):
-            print(f" {name} - shape: {tensor.shape}, mean: {tensor.mean().item():.4e}, max: {tensor.abs().max().item():.4e}, min: {tensor.min().item():.4e}")
-            if torch.isnan(tensor).any():
-                print(f" NaN detected in {name}")
-            if torch.isinf(tensor).any():
-                print(f" Inf detected in {name}")
-    
-    def log_param_grad(model):
-        print("==== [Param Gradients] ====")
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                grad = param.grad
-                if grad is not None:
-                    print(f"Layer {name} → grad std: {grad.std().item():.4e}, mean: {grad.mean().item():.4e}, |param| max: {param.abs().max().item():.4e}")
-                    if torch.isnan(grad).any():
-                        print(f" NaN in grad of {name}")
-                    if torch.isinf(grad).any():
-                        print(f" Inf in grad of {name}")
-        print("===========================")
-    
-    def log_model_output(model, state, action, pre_fc3_layer=None):
-        with torch.no_grad():
-            if pre_fc3_layer is not None:
-                x = model.leaky_relu(model.ln1(model.fc1(torch.cat([state, action], dim=-1))))
-                x = model.leaky_relu(model.ln2(model.fc2(x)))
-                log_tensor_stats("pre_fc3 Q", x)
-            q = model(state, action)
-            log_tensor_stats("Q value", q)
-    
-    def log_buffer_stats(states, actions, rewards, next_states, dones):
-        log_tensor_stats("states", states)
-        log_tensor_stats("actions", actions)
-        log_tensor_stats("rewards", rewards)
-        log_tensor_stats("next_states", next_states)
-        log_tensor_stats("dones", dones)
-    
-    def log_train_step(ddpg, states, actions, rewards, next_states, dones):
-        print("\n [Training Step Diagnostic Log]")
-        log_buffer_stats(states, actions, rewards, next_states, dones)
-    
-        with torch.no_grad():
-            next_actions = ddpg.actor(next_states)
-            target_q = ddpg.critic(next_states, next_actions)
-            current_q = ddpg.critic(states, actions)
-    
-            log_tensor_stats("Target Q", target_q)
-            log_tensor_stats("Current Q", current_q)
-            log_tensor_stats("Predicted Action", ddpg.actor(states))
-    
-            log_model_output(ddpg.critic, states, actions, pre_fc3_layer=True)
-    
-        critic_loss = F.mse_loss(current_q, rewards + ddpg.gamma * (1 - dones) * target_q)
-        print(f"Loss Critic: {critic_loss.item():.4e}")
-        print("==============================\n")
-
-    def _plot_training_summary(self, save_path=None): 
-        logs = self._train_logs
-        steps = list(range(len(logs.get("actor_losses", []))))
-    
-        fig, axs = plt.subplots(3, 2, figsize=(14, 12))
-        fig.suptitle(" Training Summary", fontsize=16)
-    
-        # 0,0: Actor / Critic Loss
-        axs[0, 0].plot(steps, logs.get("actor_losses", []), label="Actor Loss")
-        axs[0, 0].plot(steps, logs.get("critic_losses", []), label="Critic Loss")
-        axs[0, 0].set_title("Loss")
-        axs[0, 0].legend()
-    
-        # 0,1: Q values
-        axs[0, 1].plot(steps, logs.get("current_qs", []), label="Current Q")
-        axs[0, 1].plot(steps, logs.get("target_qs", []), label="Target Q")
-        axs[0, 1].set_title("Q-values")
-        axs[0, 1].legend()
-    
-        # 1,0: Reward per Train
-        axs[1, 0].plot(steps, logs.get("rewards", []), label="Reward")
-        axs[1, 0].set_title("Reward per Train")
-        axs[1, 0].legend()
-    
-        # 1,1: Critic grad norm, TD-error mean, mask ratio
-        if "critic_grad_norms" in logs:
-            axs[1, 1].plot(steps[:len(logs["critic_grad_norms"])],
-                           logs["critic_grad_norms"], label="Critic ∥∇Q∥")
-        if "td_error_means" in logs:
-            axs[1, 1].plot(steps[:len(logs["td_error_means"])],
-                           logs["td_error_means"], label="TD-error mean")
-        if "mask_ratios" in logs:
-            axs[1, 1].plot(steps[:len(logs["mask_ratios"])],
-                           logs["mask_ratios"], label="Mask ratio")
-        axs[1, 1].set_title("Critic Diagnostics")
-        axs[1, 1].legend()
-    
-        # 2,0: Actor grad norm & action distrib
-        have_actor_grad = "actor_grad_norms" in logs
-        have_action_means = "action_means" in logs
-        have_action_stds = "action_stds" in logs
-        plotted = False
-        if have_actor_grad:
-            axs[2, 0].plot(steps[:len(logs["actor_grad_norms"])],
-                           logs["actor_grad_norms"],     label="Actor ∥∇π∥")
-            plotted = True
-        if have_action_means:
-            axs[2, 0].plot(steps[:len(logs["action_means"])],
-                           logs["action_means"],         label="Action mean")
-            plotted = True
-        if have_action_stds:
-            axs[2, 0].plot(steps[:len(logs["action_stds"])],
-                           logs["action_stds"],          label="Action std")
-            plotted = True
-        if plotted:
-            axs[2, 0].set_title("Actor Diagnostics")
-            axs[2, 0].legend()
-    
-        # 2,1: Q vs Reward scatter (last batch)
-        if "q_vs_r_pairs" in logs and logs["q_vs_r_pairs"]:
-            q_vs_r = logs["q_vs_r_pairs"][-1]
-            q_vals, r_vals = zip(*q_vs_r)
-            axs[2, 1].scatter(r_vals, q_vals, alpha=0.3)
-            axs[2, 1].set_xlabel("Reward")
-            axs[2, 1].set_ylabel("Q")
-            axs[2, 1].set_title("Q vs Reward (Last Batch)")
-    
-        # Print Critic Q and Actual Reward for Debugging
-        if "critic_qs" in logs and "rewards" in logs:
-            axs[2, 1].scatter(logs["rewards"], logs["critic_qs"], alpha=0.3, label="Critic Q vs Reward")
-            axs[2, 1].legend()
-    
-        for ax in axs.flat:
-            ax.grid(True)
-    
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    
-        if save_path:
-            plt.savefig(save_path)
-            print(f" Training summary saved to {save_path}")
-            plt.show()
-        else:
-            plt.show()
-    
-    
-    
-
-         
-
-def print_model_weights(self,model, name="Model"):
-    print(f"\n {name} weights summary:")
-    for n, p in model.named_parameters():
-        if p is not None:
-            data = p.data
-            print(f"   {n}: shape={tuple(data.shape)}, mean={data.mean():.4f}, std={data.std():.4f}, min={data.min():.4f}, max={data.max():.4f}")
-            if torch.isnan(data).any():
-                print(f"   {n} contains NaNs!")
-            if torch.isinf(data).any():
-                print(f"   {n} contains Infs!")
-
-       
+               
 class Sprinter(Supervisor):
     def __init__(self):
         super().__init__()
@@ -788,54 +394,14 @@ class Sprinter(Supervisor):
         self.start_yaw = self.get_yaw()
         self.current_yaw = self.get_yaw()
         self.steps =[]
-        # Y-axis data: generic series a and b
-        self.a_values = []  # e.g. move rewards, or any first series
-        self.b_values = []  # e.g. positions, or any second series
 
-        self.state_logs=[]
         self.columns = [
             "phase", "roll", "yaw", "gyro_x", "gyro_y", "cm_norm",
             "RHipYawPitch","LHipYawPitch","RHipRoll","LHipRoll",
             "RHipPitch","LHipPitch","RKneePitch","LKneePitch",
             "RAnklePitch","LAnklePitch","RAnkleRoll","LAnkleRoll"
         ]
-    def run_bc_once(self,
-                    collect_eps: int = 40,
-                    bc_epochs: int = 100,
-                    bc_lr: float = 1e-3,
-                    bc_model_path: str = "actor_bc.pth"):
-        """
-        1) 清空旧 BC 缓存，重新采集示范数据
-        2) 调用 train_bc 打印并返回 loss 列表
-        3) 用固定文件名保存训练好的 Actor
-        """
-        #self.ddpg.load_bc()
-        print("\n🔄 开始 BC 数据采集 …")
-        self.ddpg.bc_buffer.clear()
-        self.train_bc_data_collection(num_episodes=collect_eps)
 
-        print("\n📦 开始 BC 预训练 …")
-        losses = self.ddpg.train_bc(epochs=bc_epochs, lr=bc_lr)
-
-        torch.save(self.ddpg.actor.state_dict(), bc_model_path)
-        print(f"✅ 已保存 BC 训练后的 Actor 到 {bc_model_path}")
-
-        return losses
-
-        print("\n🎉 多轮 BC 预训练完成！")
-
-    
-    
-    def print_model_weights(self, model, name="Model"):
-        print(f"\n🎯 {name} weights summary:")
-        for n, p in model.named_parameters():
-            if p is not None:
-                data = p.data
-                print(f"  📌 {n}: shape={tuple(data.shape)}, mean={data.mean().item():.4f}, std={data.std().item():.4f}, min={data.min().item():.4f}, max={data.max().item():.4f}")
-                if torch.isnan(data).any():
-                    print(f"  ❌ {n} contains NaNs!")
-                if torch.isinf(data).any():
-                    print(f"  ❌ {n} contains Infs!")
 
     
     def print_joint_ranges(self):
@@ -845,90 +411,6 @@ class Sprinter(Supervisor):
             max_pos = motor.getMaxPosition()
             print(f"{name}: Min = {min_pos:.3f}, Max = {max_pos:.3f}")
   
-    def train_bc_data_collection(self, num_episodes):
-        """
-        专门用于采集 BC 数据（基于 SequenceReplayBuffer）
-        """
-        for episode in range(num_episodes):
-            self.pre_position = self.get_translation()
-            print(f"[BC Collection] Episode: {episode}")
-    
-            state_seq, action_seq = [], []
-            current_state = self.get_current_state(0)
-    
-            for s in range(SEQUENCE_LENGTH):
-                action = torch.tensor(INITIAL_ACTIONS[s % len(INITIAL_ACTIONS)], dtype=torch.float32)
-                self.apply_action_to_robot(action)
-                self.step(self.timeStep)
-                next_state = self.get_current_state(s)
-
-                state_seq.append(current_state)
-                action_seq.append(action)
-    
-                # 提前中止逻辑
-                pm = self.get_plane_movement()
-                if self.get_center_of_mass() < 0.6:
-                    print("falling")
-                    break
-                elif abs(pm["total_angle"]) > 20:
-                    print("wrong direction")
-                    break
-    
-                current_state = next_state
-    
-            if len(state_seq) == SEQUENCE_LENGTH:
-                self.ddpg.bc_buffer.push_sequence(state_seq, action_seq)
-    
-
-    def plot_ab(self):
-        """
-        Draw two series A and B with automatically derived step axes for any length of data.
-        If one of the series is empty, only plot the other.
-        """
-        # Y-axis data
-        a = self.a_values
-        b = self.b_values
-    
-        # Create figure and axis
-        fig, ax = plt.subplots(figsize=(10, 6))
-    
-        # Plot series A if it has data
-        if a:
-            steps_a = list(range(len(a)))
-            ax.plot(steps_a, a, label='A', linestyle='-', linewidth=2)
-    
-        # Plot series B if it has data
-        if b:
-            steps_b = list(range(len(b)))
-            ax.plot(steps_b, b, label='B', linestyle='--', linewidth=2)
-    
-        # If both are empty, show a warning text
-        if not a and not b:
-            ax.text(0.5, 0.5, 'No data to plot', ha='center', va='center')
-    
-        # Set labels and title
-        ax.set_xlabel('Index', fontsize=12)
-        ax.set_ylabel('Value', fontsize=12)
-        ax.set_title('Series A vs B', fontsize=14)
-    
-        # Legend and grid (legend only if at least one series plotted)
-        if a or b:
-            ax.legend(loc='upper left', fontsize=10)
-        ax.grid(True, which='both', linestyle='--', linewidth=0.5, alpha=0.7)
-    
-        # Tight layout and display
-        fig.tight_layout()
-        plt.show()
-    
-    
-
-    
-        
-    def reset_world(self):
-        """重置整个 Webots 世界"""
-        print("Resetting world...")
-        self.worldReload()  # 使用 Supervisor 的 worldReload 方法
-        self.step(self.timeStep)  # 让 Webots 重新加载世界
 
     def get_translation(self):
         return self.translation.getSFVec3f()
@@ -1063,8 +545,7 @@ class Sprinter(Supervisor):
         ] + joint_angles
         #print(state)
         # === 6. 记录日志 ===
-        # 将当前 state 存入 state_logs 用于后续统一绘图
-        self.state_logs.append(state)
+
 
         return state
         
@@ -1082,14 +563,14 @@ class Sprinter(Supervisor):
         phase = next_state[0]  
         step_ratio = (step_idx + 1) / trunc  
         roll,  yaw = next_state[1:3]  
-        self.a_values.append(yaw)   
+        
         gyro = next_state[3:5]  
         prev_roll, prev_yaw = prev_state[1:3]  
 
         
 
         yaw_reward=abs(yaw/10)
-        self.b_values.append(yaw_reward)
+        
         reward-=yaw_reward
         sd=dm
 
@@ -1131,57 +612,15 @@ class Sprinter(Supervisor):
             action_diff=0
         reward -= action_diff 
         
-        """
-        # —— 在函数前面定义所有阈值和权重 —— 
-        yaw_small_thresh    = 0.2    # 小偏航阈值（rad）
-        diff_thresh         = 0.01   # 偏航变化量阈值（rad）
-        reduce_weight_small = 1.0    # 小偏航修正奖励权重
-        reduce_weight_large = 2.5    # 大偏航修正奖励权重
-        large_weight        = 1.5    # 大偏航惩罚权重
-        
-        # —— 计算当前偏航及差值 —— 
-        yaw_amt      = abs(yaw)
-        yaw_diff_amt = yaw_amt - abs(prev_yaw)
-        #print("yaw_amt ,prev_yaw,yaw_diff_amt",yaw_amt,abs(prev_yaw),yaw_diff_amt  )
-        
-        # —— 单独计算 yaw_reward —— 
-        yaw_reward = 0.0
-        if yaw_diff_amt < 0:
-            # A. 偏航在减少 → 纠正奖励
-            w = reduce_weight_small if yaw_amt <= yaw_small_thresh else reduce_weight_large
-            yaw_reward = - w * yaw_diff_amt
-        
-        else:
-            if yaw_amt < yaw_small_thresh and abs(yaw_diff_amt) < diff_thresh:
-                # B1. 小偏航且变化小 → 不惩罚
-                yaw_reward = 0.0
-            elif yaw_amt > yaw_small_thresh:
-                # B2. 偏航量大 → 线性大惩罚
-                yaw_excess = yaw_amt - yaw_small_thresh
-                yaw_reward = - large_weight * yaw_excess
-            else:
-                # B3. 小偏航但变化大 → 惩罚 = 变化量
-                yaw_reward = - abs(yaw_diff_amt)
-          """
-        """  
-        yaw_reward = - abs(yaw_diff_amt)
-        heading_factor = torch.cos(yaw_reward)
-
-        yaw_reward=max(min( yaw_reward, 0.2),-0.2)
-        
-        # —— 把 yaw_reward 加到总 reward 上 —— 
-        reward += yaw_reward        
-        """
-        #reward += base_reward*2
     
         # === 9. 限制总奖励范围 ===
         reward = max(min(reward, 3), -3)
         if reward ==3 or reward == -3:
             print("extrem value")
         #self.a_values.append(reward)
-        self.a_values.append(reward)
+       
      
-        
+        """
         print(f"[Reward Breakdown] total: {reward:.3f} | "
               f"yaw_reward: {yaw_reward:.3f} | "
               f"done_penalty: {done_penalty:.3f} | "
@@ -1190,7 +629,7 @@ class Sprinter(Supervisor):
               f" action_diff:{ -action_diff:.3f}|"
               )
         
-        
+        """
         return reward
 
 
@@ -1228,196 +667,229 @@ class Sprinter(Supervisor):
                 
 
 
-    def train_model(self,num_episodes,use_noise=True,noise_std=0.0,train_interval=5,max_falls=20,freeze_critic_steps=0):
+
+
+    def train_model(self,
+                    num_episodes: int,
+                    train_interval: int = 5,
+                    best_model_path: str = "check_points/best_ddpg_model.pth",
+                    *,
+                    log_dir: str = "runs/walk_exp1",
+                    resume_logs: bool = True,
+                    save_meta_every: int = 5):        # 每多少次“更新”保存一次 meta
+        """
+        精简训练：
+        - 仅在发生一次“参数更新”(self.ddpg.train()) 时：
+            * 追加一行 CSV (type='update')
+            * 打印一行到控制台
+        - best 模型仍按平滑奖励判定与保存（但不打印）
+        - global_step 以“更新步”为单位累加
+        """
+        # 1) 日志初始化/衔接（会恢复 global_step / ep_offset / best_reward）
+        if not resume_logs:
+            rotate_metrics_csv(log_dir)
+            self.global_step = 0
+            self.ep_offset   = 0
+            self.best_reward = float("-inf")
+        _prepare_logging(self, log_dir=log_dir, resume=resume_logs)
+        print(f"[resume-check] log_dir={self.log_dir}")
+        print(f"[resume-check] meta -> global_step={self.global_step}  ep_offset={self.ep_offset}  best={self.best_reward:.3f}")
+
+        # 2) 常规初始化
         fall_counter = 0
         episodes_since_train = 0
+        updates_done = 0  # 本次调用内的更新次数
+
         self.resetRobot(INITIAL_STATE)
         self.step(self.timeStep)
-        self.pre_position=self.get_translation()
-        step_count = 0
-        prev_action = torch.zeros_like(torch.tensor(INITIAL_ACTIONS[0], dtype=torch.float32, device=self.ddpg.device))
-        best_q_value = -float("inf")
-        best_model_path = "best_ddpg_model.pth"
-        a_loss, c_loss = None, None  
-        if freeze_critic_steps > 0:
-            self.ddpg.freeze_critic()
-            print(f"Critic frozen for first {freeze_critic_steps} training updates.")
-        best_reward = -float("inf")
-        recent_rewards = deque(maxlen=3)  
-        
-        for ep in range(num_episodes):
-            print(f"\n Episode {ep} (Falls so far: {fall_counter})")
+        self.pre_position = self.get_translation()
 
-            
-            
+        prev_action = torch.zeros_like(INITIAL_ACTIONS[0])
+        a_loss, c_loss = None, None
+
+        recent_rewards = deque(maxlen=SMOOTH_K)
+        best_reward = float(getattr(self, "best_reward", float("-inf")))
+
+        episodes_done = 0
+        Qmu_list, Rmu_list, Qrng_list = [], [], []
+        # 3) 主循环
+        for ep in range(num_episodes):
             self.step(self.timeStep)
             self.start_position = self.get_translation()
-    
-           
+
             raw = self.get_current_state(0)
             state = torch.tensor(raw, dtype=torch.float32, device=self.ddpg.device)
+
             episode_rewards = []
-    
-            seq_states      = []
-            seq_actions     = []
-            seq_next_states = []
-            seq_angle_r     = []
-            seq_dm          = []
-            seq_preva       = []
-            fell            = False
-    
-            
+
+            seq_states, seq_actions, seq_next_states = [], [], []
+            seq_angle_r, seq_dm, seq_preva = [], [], []
+            fell = False
+            pm = {"total_distance": 0.0, "angle_reward": 0.0, "distance_moved": 0.0}
+
             for t in range(SEQUENCE_LENGTH):
-                step_count += 1
-                self.steps.append(step_count)
-    
-                
-                if use_noise:
-                    base   = torch.tensor(
-                        INITIAL_ACTIONS[t % len(INITIAL_ACTIONS)],
-                        dtype=torch.float32, device=self.ddpg.device
-                    )
-                    action = base + torch.normal(0, noise_std, size=base.shape, device=self.ddpg.device)
-                else:
-                    self.ddpg.actor.eval()
-                    with torch.no_grad():
-                        action = self.ddpg.actor(state.unsqueeze(0)).squeeze(0)
-    
-               
+                self.ddpg.actor.eval()
+                with torch.no_grad():
+                    action = self.ddpg.actor(state.unsqueeze(0)).squeeze(0)
+
                 self.apply_action_to_robot(action)
                 self.step(self.timeStep)
+
                 raw_next = self.get_current_state(t + 1)
                 next_state = torch.tensor(raw_next, dtype=torch.float32, device=self.ddpg.device)
-    
-               
+
                 if self.get_center_of_mass() < 0.6:
-                    print(" Falling")
                     fall_counter += 1
                     fell = True
-               
-                
-                pm     = self.get_plane_movement()
-                angle_r= pm["angle_reward"]
-                dm     = pm["distance_moved"]
-               
-    
-                
+
+                pm = self.get_plane_movement()
+                angle_r = pm["angle_reward"]
+                dm = pm["distance_moved"]
+
                 seq_states.append(state.cpu())
                 seq_actions.append(action.detach().cpu())
                 seq_next_states.append(next_state.cpu())
                 seq_angle_r.append(angle_r)
                 seq_dm.append(dm)
-                #self.a_values.append(dm) 
                 seq_preva.append(prev_action)
-               
-                state        = next_state
-                prev_action  = action.detach().clone()
+
+                state = next_state
+                prev_action = action.detach().clone()
 
                 if fell:
-                    
                     self.resetRobot(INITIAL_STATE)
                     self.step(self.timeStep)
-                    self.pre_position=self.get_translation()
-                    prev_action = torch.zeros_like(torch.tensor(INITIAL_ACTIONS[0], dtype=torch.float32, device=self.ddpg.device))
-                    break_flag = True
+                    self.pre_position = self.get_translation()
+                    prev_action = torch.zeros_like(INITIAL_ACTIONS[0])
                     break
-                
-    
+
             base_reward = pm["total_distance"]
-            seq_len     = len(seq_states)
-            
+            print("total_distance",base_reward)
+            seq_len = len(seq_states)
             if fell:
-      
-                seq_dones = [False] * (seq_len - 1) + [True]
+                seq_dones = [False] * max(0, seq_len - 1) + [True] if seq_len > 0 else [True]
             else:
                 seq_dones = [False] * seq_len
-            
+
             for i in range(seq_len):
-                
-                s      = seq_states[i].clone().detach().to(self.ddpg.device)
-                a      = seq_actions[i].clone().detach().to(self.ddpg.device)
+                s = seq_states[i].clone().detach().to(self.ddpg.device)
+                a = seq_actions[i].clone().detach().to(self.ddpg.device)
                 next_s = seq_next_states[i].clone().detach().to(self.ddpg.device)
-                pa     = seq_preva[i].clone().detach().to(self.ddpg.device)
-   
-                
+                pa = seq_preva[i].clone().detach().to(self.ddpg.device)
+
                 r = self.calculate_reward(
-                    next_s,
-                    s,
-                    a,
-                    pa,
-                    seq_angle_r[i],
-                    seq_dm[i],
-                    fell,
-                    seq_len,
-                    i,
-                    base_reward
+                    next_s, s, a, pa,
+                    seq_angle_r[i], seq_dm[i],
+                    fell, seq_len, i, base_reward
                 )
-                episode_rewards.append(r) 
-                """
-                if use_noise:
-                    self.a_values.append(r)    
-                else:
-                    self.b_values.append(r)    
-                """
-                
-                # 推入 replay buffer
-                self.ddpg.replay_buffer.push(
-                    s,
-                    a,
-                    r,
-                    next_s,
-                    seq_dones[i]
-                )
-    
-            print(f" Pushed sequence of length {seq_len} (fell={fell}) to buffer")
+                episode_rewards.append(r)
+                self.ddpg.replay_buffer.push(s, a, r, next_s, seq_dones[i])
+
+            # —— 尝试触发一次参数更新 —— #
+            updated_this_ep = False
+            buffer_before_clear = len(self.ddpg.replay_buffer)  # 打印用
 
             if fell:
-                print(" Immediate  update after fall")
                 if len(self.ddpg.replay_buffer) > self.ddpg.batch_size:
                     a_loss, c_loss = self.ddpg.train()
                     episodes_since_train = 0
+                    updated_this_ep = True
             else:
                 episodes_since_train += 1
-                if episodes_since_train >= train_interval:
-                    
+                if episodes_since_train >= train_interval and len(self.ddpg.replay_buffer) > self.ddpg.batch_size:
                     a_loss, c_loss = self.ddpg.train()
-                    episodes_since_train = 0                    
-                    
+                    episodes_since_train = 0
+                    updated_this_ep = True
                 else:
                     a_loss, c_loss = None, None
 
-            if freeze_critic_steps > 0:
-                freeze_critic_steps -= 1
-                print(f" Critic freeze steps remaining: {freeze_critic_steps}")
-                if freeze_critic_steps == 0:
-                    self.ddpg.unfreeze_critic()
-                    print(" Critic unfrozen — resume normal training.")
-
             if a_loss is not None:
-                print(f"Train ⇒ Actor loss={a_loss:.6f}, Critic loss={c_loss:.6f}")
                 self.ddpg.replay_buffer.clear()
-                #print(" Replay buffer cleared")
 
-                
-            if fall_counter >= max_falls:
-                print(f"Too many falls ({fall_counter}), stopping early.")
-                break
-                
-                
-            total_reward = sum(episode_rewards)  
+            # —— 奖励与平滑（即便未更新也要计算，用于 best 判定）—— #
+            total_reward = float(sum(episode_rewards)) if episode_rewards else 0.0
             recent_rewards.append(total_reward)
             avg_recent_reward = sum(recent_rewards) / len(recent_rewards)
-            #self.a_values.append(yaw) 
-            #self.b_values.append(total_reward) 
-            print(f"Episode {ep} reward: {total_reward:.2f}, Smoothed: {avg_recent_reward:.2f}, Best so far: {best_reward:.2f}")
-            
-            if avg_recent_reward > best_reward:
-                best_reward = avg_recent_reward
-                self.ddpg.save_checkpoint(filepath=best_model_path)
-                print(f"Best model saved with smoothed reward={best_reward:.2f} ➜ {best_model_path}")
+            # —— Best 判定并保存（按平滑回报）——
+            cur_best = float(getattr(self, "best_reward", float("-inf")))
+            if avg_recent_reward > cur_best + 1e-6:  # 小epsilon防抖
+                self.best_reward = avg_recent_reward  # 更新到实例，便于 _save_meta 持久化
+                os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
+                save_checkpoint(self.ddpg, filepath=best_model_path)
+                # 可选：只在发生更新时打印；否则这里也可以打印一行
+                print(f"[best] gs={self.global_step} ep={int(self.ep_offset)+ep} "
+                      f"avgR={avg_recent_reward:.3f} -> saved {best_model_path}")
 
-       
-        self.ddpg._plot_training_summary(save_path="training_summary")
+            if updated_this_ep:
+                self.global_step = int(getattr(self, "global_step", 0)) + 1
+                updates_done += 1
+            
+                m = getattr(self.ddpg, "last_train_metrics", {}) or {}
+            
+                # —— 取均值与波动范围 —— #
+                qmu = m.get("current_q_mean")
+                rmu = m.get("reward_mean")
+                qmin = m.get("current_q_min")
+                qmax = m.get("current_q_max")
+                qrng = (qmax - qmin) if (qmin is not None and qmax is not None) else None
+            
+                # —— 记到 CSV 的 note —— #
+                def fmt(x, spec=".3f"):
+                    return "NA" if x is None else format(x, spec)
+            
+                _append_metric(self, {
+                    "global_step": self.global_step,
+                    "episode": int(self.ep_offset) + ep,
+                    "type": "update",
+                    "actor_loss": float(a_loss) if a_loss is not None else None,
+                    "critic_loss": float(c_loss) if c_loss is not None else None,
+                    "reward": total_reward,
+                    "avg_recent_reward": avg_recent_reward,
+                    "fell": bool(fell),
+                    "seq_len": int(seq_len),
+                    "note": (
+                        f"Qμ={fmt(qmu)} Rμ={fmt(rmu)} Qrng={fmt(qrng)}; "
+                        f"buffer={buffer_before_clear}"
+                    )
+                })
+            
+                # —— 追加到本轮统计 —— #
+                if qmu is not None: Qmu_list.append(qmu)
+                if rmu is not None: Rmu_list.append(rmu)
+                if qrng is not None: Qrng_list.append(qrng)
+                """
+                # —— 控制台打印（只在更新时）——
+                aL = f"{float(a_loss):.4f}" if a_loss is not None else "—"
+                cL = f"{float(c_loss):.4f}" if c_loss is not None else "—"
+                vt = f"{td_mse:.4f}" if td_mse is not None else "NA"
+                vq = f"{pol_q:.4f}"  if pol_q  is not None else "NA"
+                qa = f"{q_cur:.3f}/{q_tgt:.3f}" if (q_cur is not None and q_tgt is not None) else "NA"
+                gA = f"{g_a:.2f}" if g_a is not None else "NA"
+                gC = f"{g_c_mean:.2f}" if g_c_mean is not None else "NA"
+                lrs= (f"{a_lr:.1e}/{c_lr:.1e}" if (a_lr is not None and c_lr is not None) else "NA")
+                print(f"[upd {self.global_step}] ep={int(self.ep_offset)+ep}  "
+                      f"a_loss={aL}  c_loss={cL}  td_mse={vt}  polQ={vq}  q={qa}  "
+                      f"gradA={gA}  gradC={gC}  lrA/C={lrs}  "
+                      f"avgR={avg_recent_reward:.3f}  R={total_reward:.3f}  "
+                      f"len={seq_len}  fell={int(fell)}  buf={buffer_before_clear}")
+                """
+
+        episodes_done += 1
+
+        # —— 收尾：推进 ep_offset（按“episode 数”），保存 meta —— #
+        self.ep_offset = int(getattr(self, "ep_offset", 0)) + episodes_done
+        _save_meta(self)
+        n_upd = len(Qmu_list)
+        if n_upd == 0:
+            print("[summary] no parameter updates occurred; nothing to summarize.")
+        else:
+            # 保存 meta 后：
+            plot_q_reward_over_updates_gs(self.log_dir, Qmu_list, Rmu_list, self.global_step)
+            # 可选：再画一张“累计历史”的（跨多次重启，读 CSV）
+            plot_q_reward_from_csv_gs(self.log_dir, self.global_step, lower_quantile=0.01)
+
+
+
     
     
     def run_trained_actor(self,
@@ -1425,9 +897,8 @@ class Sprinter(Supervisor):
                           num_episodes: int = 10,
                           stop_x: float = None,
                           max_steps: int = 1000):
-
         print(f"Loading checkpoint from {checkpoint_path} …")
-        self.ddpg.load_checkpoint(filepath=checkpoint_path)
+        load_checkpoint(host=self.ddpg,filepath=checkpoint_path)
         self.ddpg.actor.eval()
     
         results = []
@@ -1439,57 +910,58 @@ class Sprinter(Supervisor):
             self.step(self.timeStep)
             start_pos = self.get_translation()
             start_x = start_pos[0]
-    
+
             raw = self.get_current_state(0)
             state = torch.tensor(raw, dtype=torch.float32, device=self.ddpg.device)
-    
+
             fell = False
             reach_time = None
-    
+            step_counter = 0
+
             for t in range(max_steps):
                 with torch.no_grad():
                     action = self.ddpg.actor(state.unsqueeze(0)).squeeze(0)
-    
+
                 self.apply_action_to_robot(action)
                 self.step(self.timeStep)
-    
+                step_counter += 1
+
                 pos = self.get_translation()
                 cur_x = pos[0]
                 cur_y = pos[1]
-    
+
                 if stop_x is not None and cur_x >= stop_x:
-                    reach_time = (t + 1) * dt
+                    reach_time = step_counter * dt
                     print(f"Reached x ≥ {stop_x:.3f} m at t={reach_time:.2f} s")
                     break
-    
-                raw_next = self.get_current_state(t + 1)
+
+                raw_next = self.get_current_state(step_counter)
                 state = torch.tensor(raw_next, dtype=torch.float32, device=self.ddpg.device)
-    
+
                 if self.get_center_of_mass() < 0.6:
-                    print("  Fell at step", t + 1)
+                    print("  Fell at step", step_counter)
                     fell = True
                     break
-    
+
             end_pos = self.get_translation()
             forward_dist = end_pos[0] - start_x
             lateral_dist = end_pos[1] - start_pos[1]
-            simulated_steps = t + 1
-            elapsed_time = simulated_steps * dt
-    
+            elapsed_time = step_counter * dt
+
             print(f"→ Episode {ep + 1}: forward={forward_dist:.3f} m, "
                   f"lateral={lateral_dist:.3f} m, fell={fell}, "
-                  f"time={elapsed_time:.2f} s, reach_time={reach_time}")
-    
+                  f"time={elapsed_time:.2f} s, steps={step_counter}, reach_time={reach_time}")
+
             results.append({
                 "episode": ep + 1,
                 "forward": forward_dist,
                 "lateral": lateral_dist,
                 "fell": fell,
-                "time": elapsed_time,         
-                "steps": simulated_steps,     
-                "reach_time": reach_time      
+                "time": elapsed_time,
+                "steps": step_counter,
+                "reach_time": reach_time
             })
-    
+
         return results
 
     def run_walk_sequence_until_x(self,
@@ -1510,7 +982,7 @@ class Sprinter(Supervisor):
     
         for loop in range(max_loops):
             for t in range(len(gait_sequence)):
-                action = torch.tensor(gait_sequence[t], dtype=torch.float32, device=self.ddpg.device)
+                action = gait_sequence[t]  # 已经是 tensor
                 self.apply_action_to_robot(action)
                 self.step(self.timeStep)
                 step_counter += 1
@@ -1547,53 +1019,7 @@ class Sprinter(Supervisor):
             "fell": True
         }
         
-    def plot_state_trajectories(self, plots_per_fig: int = 6):
 
-        arr = np.array(self.state_logs, dtype=float)  # shape = (total_steps, state_dim)
-        total_steps, state_dim = arr.shape
-
-        
-        if total_steps % SEQUENCE_LENGTH == 0:
-            num_eps = total_steps // SEQUENCE_LENGTH
-            all_states = arr.reshape(num_eps, SEQUENCE_LENGTH, state_dim)
-            seq_len = SEQUENCE_LENGTH
-        else:
-            all_states = arr[np.newaxis, ...]  # shape = (1, total_steps, state_dim)
-            num_eps = 1
-            seq_len = total_steps
-
-        num_figs = math.ceil(state_dim / plots_per_fig)
-        ncols = math.ceil(plots_per_fig / 2)
-        nrows = 2
-
-        for fig_idx in range(num_figs):
-            fig, axes = plt.subplots(nrows=nrows, ncols=ncols,
-                                     figsize=(4 * ncols, 4 * nrows))
-            axes = axes.flatten()
-
-            for i, ax in enumerate(axes):
-                dim_idx = fig_idx * plots_per_fig + i
-                if dim_idx >= state_dim:
-                    ax.axis('off')
-                    continue
-
-                name = self.columns[dim_idx]
-                for ep in range(num_eps):
-                    ax.plot(
-                        range(seq_len),
-                        all_states[ep, :, dim_idx],
-                        alpha=0.6,
-                        label=f"ep{ep+1}" if ep == 0 else None
-                    )
-                ax.set_title(name)
-                ax.set_xlabel("Step")
-                ax.set_ylabel(name)
-                ax.grid(True)
-                if num_eps <= 5:
-                    ax.legend()
-
-            plt.tight_layout()
-            plt.show()
     
 
 
@@ -1604,24 +1030,27 @@ controller.initialize()
 ckpt_path = CKPTPATH
 ckptl_path = CKPTLPATH
 
-#controller.ddpg.load_bc()
+load_checkpoint( host=controller.ddpg)
+#load_bc(host=controller.ddpg)
 #controller.run_bc_once()
-#controller.train_model(TRAIN_EPISODES)
+controller.train_model(TRAIN_EPISODES,resume_logs=True)
+save_checkpoint( host=controller.ddpg)
 """
-controller.ddpg.load_checkpoint( ckpt_path)
-#controller.ddpg.load_bc()
+load_checkpoint( ckpt_path)
+#load_bc(host=self.ddpg)
 controller.train_model(NUM_EPISODES,use_noise=False) 
-controller.ddpg.save_checkpoint(ckpt_path )
+save_checkpoint(host=self.ddpg,ckpt_path )
 """
 #controller.train_model(NUM_EPISODES,use_noise=False,freeze_critic_steps=10) 
-#controller.plot_state_trajectories()
 
+"""
 results = controller.run_trained_actor(
     checkpoint_path="best_ddpg_model_rd.pth",
     num_episodes=1,
     stop_x=4.5,          
     max_steps=6000        
 )
+"""
 #controller.run_walk_sequence_until_x(target_x=4.5)
 #checkpoint_path="ddpg_checkpoint.pth"
 #checkpoint_path="best_ddpg_model.pth",
