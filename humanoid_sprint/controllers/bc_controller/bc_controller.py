@@ -211,28 +211,37 @@ class Sprinter(Supervisor):
             if len(state_seq) == SEQUENCE_LENGTH:
                 self.bc_buffer.push_sequence(state_seq, action_seq)
 
-    def train_bc(self, epochs=200, lr=1e-3, weight_decay=0.0, clip_norm=None, patience=20, print_every=1):
-        """训练并打印/记录 bc_loss。返回一个包含每个 epoch loss 的列表。"""
+    def train_bc(self, epochs=200, lr=1e-3, weight_decay=0.0, clip_norm=None,
+                patience=20, print_every=1, seq_batch_size=32, iters_per_epoch=10):
         self.actor.train()
-        opt = torch.optim.Adam(self.actor.net.parameters(), lr=lr, weight_decay=weight_decay)
-        loss_fn = nn.MSELoss()
+        opt = torch.optim.Adam(self.actor.parameters(), lr=lr, weight_decay=weight_decay)
         best = float('inf'); no_improve = 0
         self.bc_losses = []
 
         for epoch in range(1, epochs+1):
-            states, actions = self.bc_buffer.flatten_sample(batch_size=3)
-            states  = states.to(self.device)
-            actions = actions.to(self.device)
+            epoch_loss = 0.0
+            for _ in range(iters_per_epoch):
+                states, actions = self.bc_buffer.flatten_sample(batch_size=seq_batch_size)  # 32*35 ≈ 1120 样本
+                states, actions = states.to(self.device), actions.to(self.device)
 
-            pred = self.actor(states)
-            loss = loss_fn(pred, actions)
-            opt.zero_grad(); loss.backward()
-            if clip_norm: torch.nn.utils.clip_grad_norm_(self.actor.net.parameters(), clip_norm)
-            opt.step()
+                # —— 归一化到 [-1,1] 空间训练（配合 Actor.tanh 输出）——
+                mid = (self.actor.joint_min + self.actor.joint_max) * 0.5
+                half = (self.actor.joint_max - self.actor.joint_min) * 0.5
+                targets_norm = (torch.clamp(actions, self.actor.joint_min, self.actor.joint_max) - mid) / (half + 1e-6)
 
-            val = loss.item()
+                pred = self.actor(states)             # 已在范围内
+                pred_norm = (pred - mid) / (half + 1e-6)
+
+                loss = F.mse_loss(pred_norm, targets_norm)
+                opt.zero_grad(); loss.backward()
+                if clip_norm:
+                    torch.nn.utils.clip_grad_norm_(self.actor.parameters(), clip_norm)
+                opt.step()
+
+                epoch_loss += loss.item()
+
+            val = epoch_loss / max(1, iters_per_epoch)
             self.bc_losses.append(val)
-
             if (epoch % print_every) == 0:
                 print(f"[BC][Epoch {epoch:03d}] bc_loss = {val:.6f}")
 
@@ -241,14 +250,121 @@ class Sprinter(Supervisor):
             else:
                 no_improve += 1
                 if no_improve >= patience:
-                    print(f"[BC] Early stop (no improve for {patience} epochs). Best loss={best:.6f}")
+                    print(f"[BC] Early stop (no improve {patience}). Best={best:.6f}")
                     break
-
-        print(f"[BC] Done. Last loss={self.bc_losses[-1]:.6f}, Best loss={min(self.bc_losses):.6f}")
-        return self.bc_losses
 
     def get_center_of_mass(self):
         return self.get_translation()[2]
+    
+        # ====== BC 评测：只按摔倒或步数上限停止（无总位移检测） ======
+    def eval_bc_walk(self,
+                     max_steps: int = 3000,
+                     com_fall_threshold: float = 0.6,
+                     log_csv_path: str = None,
+                     print_every: int = 50):
+        """
+        用当前 BC actor 连续行走，直到：
+          - 摔倒 (COM < com_fall_threshold)，或
+          - 达到 max_steps
+        不做任何总位移/进展检测。
+
+        返回：dict 总结统计；若提供 log_csv_path，将逐步写入 CSV。
+        """
+        import csv, time
+
+        # 1) 准备
+        self.actor.eval()
+        dt = float(self.timeStep) / 1000.0  # 秒/步
+
+        # 以“当前”为起点计距离
+        self.pre_position = self.get_translation()
+        self.start_position = self.get_translation()
+
+        # 初始状态
+        cur_state = torch.tensor(self.get_current_state(0), dtype=torch.float32, device=self.device)
+
+        # 可选：逐步日志 CSV
+        csv_writer = None
+        f_csv = None
+        if log_csv_path:
+            f_csv = open(log_csv_path, "w", newline="", encoding="utf-8")
+            csv_writer = csv.DictWriter(f_csv, fieldnames=[
+                "step", "dx", "total_distance", "yaw", "com"
+            ])
+            csv_writer.writeheader()
+
+        reason = "max_steps_reached"
+        total_distance = 0.0
+        t0 = time.time()
+
+        # 2) 主循环
+        for step_idx in range(1, max_steps + 1):
+            # 前向 & 动作
+            with torch.no_grad():
+                action = self.actor(cur_state.unsqueeze(0)).squeeze(0)
+
+            # 施加 & 推进
+            self.apply_action_to_robot(action)
+            self.step(self.timeStep)
+
+            # 读数（仅用于记录/显示，不做停止判据）
+            pm = self.get_plane_movement()   # 会更新 self.pre_position
+            dx = float(pm["distance_moved"])
+            total_distance = float(pm["total_distance"])
+            com = float(self.get_center_of_mass())
+            yaw = float(self.get_yaw())
+
+            if csv_writer:
+                csv_writer.writerow({
+                    "step": step_idx, "dx": dx,
+                    "total_distance": total_distance,
+                    "yaw": yaw, "com": com
+                })
+
+            if (print_every is not None) and (step_idx % int(print_every) == 0):
+                print(f"[BC-EVAL] step={step_idx}  dx={dx:.4f}  total={total_distance:.3f}  yaw={yaw:.2f}  com={com:.3f}")
+
+            # 摔倒即停止
+            if com < float(com_fall_threshold):
+                reason = f"fell(com={com:.3f}<{com_fall_threshold})"
+                break
+
+            # 下一步状态
+            cur_state = torch.tensor(self.get_current_state(step_idx), dtype=torch.float32, device=self.device)
+
+        if f_csv:
+            f_csv.close()
+
+        # 3) 汇总
+        elapsed = time.time() - t0
+        avg_dx_per_step = total_distance / max(1, step_idx)
+        avg_speed = total_distance / max(1e-6, step_idx * dt)
+
+        summary = {
+            "steps": step_idx,
+            "total_distance": total_distance,
+            "avg_dx_per_step": avg_dx_per_step,
+            "avg_speed_mps": avg_speed,
+            "time_sec": elapsed,
+            "stopped_by": reason
+        }
+
+        print("[BC-EVAL][summary] "
+              f"steps={step_idx}  total={total_distance:.3f}  "
+              f"avg_dx={avg_dx_per_step:.4f}/step  speed≈{avg_speed:.3f} m/s  "
+              f"dt={dt:.3f}s  reason={reason}")
+
+        return summary
+
+    def eval_bc_walk_from_file(self, bc_path: str, **kwargs):
+        """
+        从文件加载 BC 权重并调用 eval_bc_walk（不进行总位移检测）。
+        kwargs 会透传给 eval_bc_walk（如 max_steps、log_csv_path 等）。
+        """
+        self.load_bc_actor(bc_path, strict=True, eval_mode=True)
+        print(f"[BC-EVAL] Loaded {bc_path}. Start evaluation…")
+        return self.eval_bc_walk(**kwargs)
+
 
 # —— 运行（在 Webots 里作为控制器使用）——
 controller = Sprinter(auto_load_bc=True, bc_path="actor_bc.pth")  # 启动时自动尝试加载
@@ -257,6 +373,14 @@ controller.initialize()
 # 如果你只想基于历史BC直接跑，不想采集&再训练，可以注释掉下面两行
 controller.collect_bc_data(num_episodes=40)
 controller.train_bc(epochs=100, lr=1e-3)
+controller.eval_bc_walk(max_steps=2000, print_every=25)
 
 # 训练后保存
 controller.save_bc_actor("actor_bc.pth")
+"""
+controller.eval_bc_walk_from_file("actor_bc.pth",
+                                 max_steps=3000,
+                                 com_fall_threshold=0.6,
+                                 log_csv_path="bc_eval_log.csv",
+                                 print_every=50)
+"""
